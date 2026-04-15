@@ -13,6 +13,14 @@ info()  { printf '\033[1;34m>\033[0m %s\n' "$*"; }
 ok()    { printf '\033[1;32m>\033[0m %s\n' "$*"; }
 err()   { printf '\033[1;31m>\033[0m %s\n' "$*" >&2; }
 
+# ── Check source file exists ────────────────────────────────────────────────
+
+if [[ ! -f "$SOURCE_FILE" ]]; then
+    err "speaker-eq.conf not found at $SOURCE_FILE"
+    err "Make sure you're running this from the repo directory."
+    exit 1
+fi
+
 # ── Check PipeWire ──────────────────────────────────────────────────────────
 
 if ! pactl info 2>/dev/null | grep -q "PipeWire"; then
@@ -89,12 +97,14 @@ ok "Config installed to $CONFIG_FILE"
 # ── Restart PipeWire ────────────────────────────────────────────────────────
 
 info "Restarting PipeWire..."
-systemctl --user restart pipewire pipewire-pulse
+systemctl --user restart pipewire 2>/dev/null || true
+systemctl --user restart pipewire-pulse 2>/dev/null || true
 sleep 2
 
 # ── Set as default ──────────────────────────────────────────────────────────
 
-node_id=$(wpctl status 2>/dev/null | grep 'effect_input.speaker_eq' | head -1 | grep -o '[0-9]\+' | head -1)
+# Extract node ID: match "  42. effect_input.speaker_eq" and pull the number before the dot
+node_id=$(wpctl status 2>/dev/null | grep 'effect_input.speaker_eq' | head -1 | sed -n 's/.*\s\([0-9]\+\)\.\s*effect_input\.speaker_eq.*/\1/p')
 if [[ -n "$node_id" ]]; then
     wpctl set-default "$node_id"
     ok "Speaker EQ active (output: Internal Speakers, node $node_id)"
