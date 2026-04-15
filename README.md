@@ -139,15 +139,27 @@ pactl info | grep "Server Name"
 
 ## Calibration tool
 
-A Python script (`speaker-calibrate.py`) is included that can measure your speaker's frequency response. This is optional -- you don't need it to use the EQ config above.
+A Python script (`speaker-calibrate.py`) is included that can measure your speaker's frequency response. This is optional -- you don't need it to use the EQ config above. It's useful if you want to:
 
-### What it does
+- Verify how the EQ is performing on your machine
+- Create a custom EQ profile for a different laptop model
+- Fine-tune the existing profile to your preference
 
-1. Generates a sine sweep (50 Hz - 20 kHz)
-2. Plays it through the speakers
-3. Records through the built-in DMIC
-4. Computes and displays the frequency response
-5. Optionally auto-generates a new EQ config (not recommended -- the hand-tuned config above is better)
+### How it works
+
+The script measures what your speakers actually sound like by playing a test signal and recording what comes back through the microphone:
+
+1. **Generates a test signal** -- a logarithmic sine sweep from 50 Hz to 20 kHz (3 seconds long). This covers the full audible range, spending more time on the low frequencies where laptop speakers are weakest.
+
+2. **Plays through the speakers** -- the sweep is played via PulseAudio/PipeWire so it passes through any active EQ filter chain. This means you can measure the "before" (without EQ installed) and "after" (with EQ installed) to see the difference.
+
+3. **Records through the built-in DMIC** -- simultaneously captures what the speakers are producing. The digital microphone is built into the laptop chassis, so the recording reflects what the speakers actually output.
+
+4. **Analyzes the frequency response** -- uses Welch's method (power spectral density estimation) to compare the recorded signal against the original. The result shows how loud each frequency is relative to the others -- revealing where the speakers are weak (bass) and where they resonate (mids).
+
+5. **Displays an ASCII chart** -- shows the response at key frequencies so you can see the shape at a glance. Multiple passes can be averaged for more reliable results.
+
+6. **Optionally auto-generates EQ** -- in calibration mode (without `--measure-only`), it designs parametric EQ bands to correct toward a target curve and writes a PipeWire filter-chain config. However, the hand-tuned config in this repo generally sounds better than the auto-generated one, because the built-in mic has limitations (see below).
 
 ### Prerequisites
 
@@ -207,14 +219,59 @@ systemctl --user restart pipewire pipewire-pulse
 
 - All values are relative -- the absolute numbers don't matter, only the shape
 - A flat line would mean all frequencies are equally loud
-- The DMIC can't reliably measure above ~1.5 kHz, so ignore those readings
-- The 500-2000 Hz range is used as the reference point
+- The typical laptop pattern: weak bass, a peak around 500-1000 Hz, then the DMIC drops off
+- The 500-2000 Hz range is used as the normalization reference
+- Readings above ~1.5 kHz are unreliable due to the DMIC's limited high-frequency sensitivity -- ignore them
+
+### Creating a profile for a different laptop
+
+If you have a different ThinkPad (or any laptop), you can use the calibration tool to understand your speakers and build a custom EQ:
+
+1. **Set up the script for your hardware.** Edit the two device name variables at the top of `speaker-calibrate.py`:
+
+   ```python
+   SPEAKER_SINK = "alsa_output.pci-..."  # your speaker sink
+   MIC_SOURCE = "alsa_input.pci-..."     # your built-in mic
+   ```
+
+   Find your sink name with `pactl list short sinks` and your source name with `pactl list short sources`.
+
+2. **Measure without any EQ installed** to see the raw speaker response:
+
+   ```bash
+   # Remove any existing EQ first
+   rm -f ~/.config/pipewire/pipewire.conf.d/speaker-eq.conf
+   systemctl --user restart pipewire pipewire-pulse
+
+   # Run measurement
+   python3 speaker-calibrate.py --measure-only --iterations 5
+   ```
+
+3. **Read the chart and identify problems.** Common patterns:
+   - **Deep dip at low frequencies (63-250 Hz)** -- the speakers need bass boost. Add a `bq_lowshelf` with positive gain.
+   - **A peak at a specific frequency** -- this is a resonance. Add a `bq_peaking` filter at that frequency with negative gain to cut it. On the X1 Carbon Gen 13, this was at 700 Hz.
+   - **Everything is too quiet** -- add preamp stages (see the existing config for the shelf filter trick).
+
+4. **Start with the existing `speaker-eq.conf` and modify it.** Copy the file, adjust the frequency and gain values based on your measurements, install it, and re-measure to see if it improved:
+
+   ```bash
+   # Edit the config
+   nano speaker-eq.conf
+
+   # Install and test
+   ./install.sh
+
+   # Measure again to see the effect
+   python3 speaker-calibrate.py --measure-only --iterations 3
+   ```
+
+5. **Iterate.** Adjust, reinstall, re-measure. Focus on the frequencies below 1.5 kHz where the DMIC gives reliable readings. For higher frequencies, trust your ears.
 
 ### Limitations
 
-- The built-in DMIC has very limited high-frequency sensitivity -- readings above ~1.5 kHz are unreliable
-- Background noise and room acoustics affect the measurement -- keep the room quiet
-- The hardcoded ALSA device names are specific to the X1 Carbon Gen 13 -- other machines will need to edit the `SPEAKER_SINK` and `MIC_SOURCE` variables at the top of the script
+- The built-in DMIC has very limited high-frequency sensitivity -- readings above ~1.5 kHz are unreliable and should not be used for tuning decisions. Use your ears for the upper range.
+- The measurement is affected by room acoustics and background noise. Keep the room quiet and avoid running the test near hard reflective surfaces.
+- The auto-calibrate mode tends to overcorrect because it trusts the unreliable high-frequency DMIC readings. The `--measure-only` mode combined with manual tuning produces much better results.
 
 ---
 
