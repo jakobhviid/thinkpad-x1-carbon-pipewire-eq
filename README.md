@@ -15,66 +15,66 @@ With this fix applied, the speakers sound fuller, warmer, and louder -- much clo
 
 ## Installation
 
-### Step 1: Download the config file
-
-Clone this repo or just download `speaker-eq.conf`:
+### Step 1: Clone the repo
 
 ```bash
 git clone https://github.com/jakobhviid/thinkpad-x1-carbon-pipewire-eq.git
 cd thinkpad-x1-carbon-pipewire-eq
 ```
 
-### Step 2: Copy it to the right place
+### Step 2: Run the installer
+
+```bash
+./install.sh
+```
+
+The installer will:
+1. Check that PipeWire is running
+2. Auto-detect your internal speaker sink (so it works on different ThinkPad models)
+3. Install the EQ config to `~/.config/pipewire/pipewire.conf.d/speaker-eq.conf`
+4. Restart PipeWire
+5. Set the new output as your default
+
+If auto-detection fails, it will list your available audio outputs and ask you to pick one.
+
+### Step 3: Select the new audio output
+
+The EQ works by creating a **new virtual audio device** called **"Internal Speakers"**. This device routes your audio through the EQ filters before sending it to the physical speakers.
+
+After installation, **"Internal Speakers"** should already be selected as your default output. If it isn't, open your system **Sound Settings** (GNOME Settings > Sound, or click the speaker icon in the top bar) and select **"Internal Speakers"** from the output list.
+
+> **Important:** You should always use **"Internal Speakers"** as your output when using the laptop speakers. The original speaker output (usually named something like "Lunar Lake-M HD Audio Controller Speaker") still exists but bypasses the EQ -- if you select it, you'll hear the original thin sound.
+
+### Step 4: Play some audio
+
+It should sound noticeably fuller, warmer, and louder. The difference is immediate.
+
+### Manual installation
+
+If you prefer not to use the install script:
 
 ```bash
 mkdir -p ~/.config/pipewire/pipewire.conf.d
 cp speaker-eq.conf ~/.config/pipewire/pipewire.conf.d/speaker-eq.conf
-```
-
-### Step 3: Restart PipeWire
-
-```bash
 systemctl --user restart pipewire pipewire-pulse
 ```
 
-### Step 4: Select the output
-
-Open your system **Sound Settings** (GNOME Settings > Sound, or click the volume icon in the top bar). You should see a new output called **"Internal Speakers"**. Select it.
-
-Alternatively, from the terminal:
-
-```bash
-# Find the node number (look for "effect_input.speaker_eq")
-wpctl status
-
-# Set it as default (replace 42 with the actual number from above)
-wpctl set-default 42
-```
-
-### Step 5: Verify it's working
-
-Play some audio. It should sound noticeably fuller and louder. You can verify the filter is loaded:
-
-```bash
-pactl list sinks | grep -A2 effect_input
-```
-
-You should see:
-
-```
-Name: effect_input.speaker_eq
-Description: Internal Speakers
-Driver: PipeWire
-```
+> **Note:** If you're not on a ThinkPad X1 Carbon Gen 13, you may need to edit the `node.target` line in the config to match your speaker sink name. Run `pactl list short sinks` to find it.
 
 ## Uninstall
 
-To remove the EQ and go back to the default sound:
+```bash
+./uninstall.sh
+```
+
+Or manually:
 
 ```bash
 rm ~/.config/pipewire/pipewire.conf.d/speaker-eq.conf
 systemctl --user restart pipewire pipewire-pulse
 ```
+
+This removes the virtual "Internal Speakers" device and restores the default audio output.
 
 ## Adjusting the EQ
 
