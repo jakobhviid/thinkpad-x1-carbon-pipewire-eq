@@ -31,11 +31,14 @@ cd thinkpad-x1-carbon-pipewire-eq
 The installer will:
 1. Check that PipeWire is running
 2. Auto-detect your internal speaker sink (so it works on different ThinkPad models)
-3. Install the EQ config to `~/.config/pipewire/pipewire.conf.d/speaker-eq.conf`
-4. Restart PipeWire
-5. Set the new output as your default
+3. Ask you for a **volume boost level** (default: +8 dB per stage, 3 stages = +24 dB total). If the speakers are too quiet, increase this. If audio distorts at high volume, decrease it.
+4. Install the EQ config to `~/.config/pipewire/pipewire.conf.d/speaker-eq.conf`
+5. Restart PipeWire
+6. Set the new output as your default
 
 If auto-detection fails, it will list your available audio outputs and ask you to pick one.
+
+**Too quiet or too loud?** Just run `./install.sh` again and pick a different boost level.
 
 ### Step 3: Select the new audio output
 

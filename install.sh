@@ -73,9 +73,30 @@ fi
 
 ok "Found speaker sink: $speaker_sink"
 
+# ── Volume boost ───────────────────────────────────────────────────────────
+
+DEFAULT_BOOST=8
+echo ""
+info "Volume boost: each preamp stage adds gain to compensate for quiet laptop speakers."
+echo "  The default is +${DEFAULT_BOOST} dB per stage (3 stages = +$((DEFAULT_BOOST * 3)) dB total)."
+echo "  If your speakers are too quiet, increase this. If audio distorts, decrease it."
+echo ""
+read -rp "  Boost per stage in dB [${DEFAULT_BOOST}]: " boost_input
+boost="${boost_input:-$DEFAULT_BOOST}"
+
+# Validate it's a number
+if ! [[ "$boost" =~ ^[0-9]+\.?[0-9]*$ ]]; then
+    err "Invalid number: $boost. Using default ${DEFAULT_BOOST} dB."
+    boost="$DEFAULT_BOOST"
+fi
+
+total_boost=$(echo "$boost * 3" | bc)
+ok "Volume boost: +${boost} dB per stage (+${total_boost} dB total)"
+
 # ── Check for existing config ───────────────────────────────────────────────
 
 if [[ -f "$CONFIG_FILE" ]]; then
+    echo ""
     info "Existing speaker EQ config found at $CONFIG_FILE"
     read -rp "Overwrite? [y/N] " confirm
     if [[ ! "$confirm" =~ ^[Yy] ]]; then
@@ -88,9 +109,17 @@ fi
 
 mkdir -p "$CONFIG_DIR"
 
-# Copy config and substitute the speaker sink name
-sed "s|node.target = \".*\"|node.target = \"$speaker_sink\"|" \
-    "$SOURCE_FILE" > "$CONFIG_FILE"
+# Copy config, substitute speaker sink and preamp gain values
+sed -e "s|node.target = \".*\"|node.target = \"$speaker_sink\"|" \
+    -e "s|# Preamp part 1: +.* dB across all frequencies|# Preamp part 1: +${boost} dB across all frequencies|" \
+    -e "s|# Preamp part 2: +.* dB across all frequencies|# Preamp part 2: +${boost} dB across all frequencies|" \
+    -e "s|# Preamp part 3: +.* dB more|# Preamp part 3: +${boost} dB more|" \
+    "$SOURCE_FILE" | \
+    awk -v boost="$boost" '
+        /# Preamp part [123]/ { preamp=1 }
+        preamp && /"Gain"/ { sub(/"Gain"  = [0-9.]+/, "\"Gain\"  = " boost); preamp=0 }
+        { print }
+    ' > "$CONFIG_FILE"
 
 ok "Config installed to $CONFIG_FILE"
 
@@ -114,4 +143,5 @@ fi
 
 echo ""
 echo "Done! Play some audio to hear the difference."
+echo "Volume boost: +${total_boost} dB. To change, run ./install.sh again."
 echo "To uninstall: $SCRIPT_DIR/uninstall.sh"
