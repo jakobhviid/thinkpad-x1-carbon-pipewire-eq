@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """
-Speaker calibration for ThinkPad X1 Carbon Gen 13.
+Speaker calibration tool.
 
 Plays a log sweep through the speakers, records via the built-in mic,
 computes the frequency response, and generates a PipeWire filter-chain
 EQ config to flatten it out.
 
+Auto-detects speaker and microphone devices, or accepts them as arguments.
 Run multiple iterations for progressive refinement.
 """
 
-import subprocess, sys, os, json, time, tempfile
+import subprocess, sys, os, json, time, tempfile, re
 import numpy as np
 from scipy import signal, fft
 
@@ -20,9 +21,6 @@ SWEEP_HIGH = 20000
 SETTLE = 0.5          # seconds silence before/after
 ITERATIONS = 3
 EQ_CONFIG = os.path.expanduser("~/.config/pipewire/pipewire.conf.d/speaker-eq.conf")
-SPEAKER_SINK = "alsa_output.pci-0000_00_1f.3-platform-sof_sdw.HiFi__Speaker__sink"
-# Use the digital mic as capture source
-MIC_SOURCE = "alsa_input.pci-0000_00_1f.3-platform-sof_sdw.HiFi__Mic__source"
 
 # Target: mild bass boost curve (not flat — flat sounds thin on small speakers)
 # This defines how many dB above flat we WANT at each frequency
@@ -30,6 +28,108 @@ TARGET_CURVE = {
     50: 6, 100: 5, 200: 4, 400: 2, 800: 0,
     1500: 0, 2500: -1, 4000: 0, 8000: 0, 16000: -1
 }
+
+def get_pactl_list(kind):
+    """Get list of sinks or sources from pactl. Returns list of (name, description) tuples."""
+    result = subprocess.run(["pactl", "list", "short", kind], capture_output=True, text=True)
+    items = []
+    for line in result.stdout.strip().splitlines():
+        parts = line.split("\t")
+        if len(parts) >= 2:
+            items.append(parts[1])
+    return items
+
+
+def detect_speaker_sink():
+    """Auto-detect the internal speaker sink."""
+    sinks = get_pactl_list("sinks")
+    exclude = re.compile(r'hdmi|usb|bluez|bluetooth|raop|effect_input', re.IGNORECASE)
+
+    # Primary: look for "speaker" in the name
+    for name in sinks:
+        if re.search(r'speaker', name, re.IGNORECASE) and not exclude.search(name):
+            return name
+
+    # Fallback: look for SOF/HDA analog output
+    for name in sinks:
+        if re.search(r'sof|hda|analog', name, re.IGNORECASE) and not exclude.search(name):
+            return name
+
+    return None
+
+
+def detect_mic_source():
+    """Auto-detect the built-in microphone source."""
+    sources = get_pactl_list("sources")
+    exclude = re.compile(r'monitor|usb|bluez|bluetooth|hdmi', re.IGNORECASE)
+
+    # Primary: look for "mic" in the name (but not headset)
+    for name in sources:
+        if re.search(r'mic', name, re.IGNORECASE) \
+           and not re.search(r'headset', name, re.IGNORECASE) \
+           and not exclude.search(name):
+            return name
+
+    # Fallback: any non-monitor, non-USB source
+    for name in sources:
+        if not exclude.search(name):
+            return name
+
+    return None
+
+
+def prompt_device_choice(kind, devices):
+    """Let the user pick a device from a numbered list."""
+    print(f"\n  Available {kind}:")
+    for i, name in enumerate(devices, 1):
+        print(f"    {i}. {name}")
+    while True:
+        try:
+            choice = input(f"\n  Enter number (1-{len(devices)}): ").strip()
+            idx = int(choice) - 1
+            if 0 <= idx < len(devices):
+                return devices[idx]
+        except (ValueError, EOFError):
+            pass
+        print("  Invalid choice, try again.")
+
+
+def resolve_devices(speaker_arg, mic_arg):
+    """Resolve speaker sink and mic source from args or auto-detection."""
+    # Speaker
+    if speaker_arg:
+        speaker = speaker_arg
+        print(f"  Speaker: {speaker} (from --speaker)")
+    else:
+        speaker = detect_speaker_sink()
+        if speaker:
+            print(f"  Speaker: {speaker} (auto-detected)")
+        else:
+            print("  Could not auto-detect speaker sink.")
+            sinks = get_pactl_list("sinks")
+            if not sinks:
+                print("  ERROR: No audio sinks found. Is PipeWire running?")
+                sys.exit(1)
+            speaker = prompt_device_choice("sinks", sinks)
+
+    # Mic
+    if mic_arg:
+        mic = mic_arg
+        print(f"  Mic:     {mic} (from --mic)")
+    else:
+        mic = detect_mic_source()
+        if mic:
+            print(f"  Mic:     {mic} (auto-detected)")
+        else:
+            print("  Could not auto-detect microphone source.")
+            sources = [s for s in get_pactl_list("sources") if "monitor" not in s.lower()]
+            if not sources:
+                print("  ERROR: No audio sources found.")
+                sys.exit(1)
+            mic = prompt_device_choice("sources", sources)
+
+    return speaker, mic
+
 
 def generate_sweep(filename):
     """Generate a logarithmic sine sweep WAV file."""
@@ -51,15 +151,11 @@ def generate_sweep(filename):
     return n_settle, n_sweep
 
 
-def play_and_record(sweep_file, rec_file):
+def play_and_record(sweep_file, rec_file, mic):
     """Play sweep through speakers while recording from mic simultaneously."""
     total_dur = DURATION + 2 * SETTLE + 1  # extra second margin
 
-    # Use the built-in DMIC (not the USB webcam mic)
-    mic = "alsa_input.pci-0000_00_1f.3-platform-sof_sdw.HiFi__Mic__source"
-    print(f"  Using mic: Digital Microphone (DMIC)")
-
-    # Set DMIC as default source to ensure arecord uses it
+    # Set mic as default source
     subprocess.run(["pactl", "set-default-source", mic], capture_output=True)
 
     # Start recording via PulseAudio/PipeWire (not raw ALSA)
@@ -179,7 +275,7 @@ def design_eq(freqs, measured_db, iteration):
     return bands, freqs, error_db
 
 
-def write_pipewire_config(bands):
+def write_pipewire_config(bands, speaker_sink):
     """Write the PipeWire filter-chain config with the computed EQ bands."""
     nodes = []
     for i, band in enumerate(bands):
@@ -229,7 +325,7 @@ context.modules = [
             }}
             playback.props = {{
                 node.name   = "effect_output.speaker_eq"
-                node.target = "{SPEAKER_SINK}"
+                node.target = "{speaker_sink}"
                 audio.channels = 2
                 audio.position = [ FL FR ]
             }}
@@ -277,25 +373,32 @@ def print_response(freqs, db, label):
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description="Speaker calibration for ThinkPad X1 Carbon Gen 13")
+    parser = argparse.ArgumentParser(description="Speaker calibration tool — measure and EQ laptop speakers")
     parser.add_argument("--measure-only", action="store_true",
                         help="Only measure and display response — do not change EQ config")
     parser.add_argument("--iterations", type=int, default=ITERATIONS,
                         help=f"Number of measurement passes (default: {ITERATIONS})")
+    parser.add_argument("--speaker", type=str, default=None,
+                        help="Speaker sink name (auto-detected if not given)")
+    parser.add_argument("--mic", type=str, default=None,
+                        help="Microphone source name (auto-detected if not given)")
     args = parser.parse_args()
 
     measure_only = args.measure_only
     iterations = args.iterations
 
     if measure_only:
-        print("Speaker Response Measurement — ThinkPad X1 Carbon Gen 13")
-        print("=" * 55)
+        print("Speaker Response Measurement")
+        print("=" * 40)
         print(f"Will run {iterations} measurement passes (no changes will be made).\n")
     else:
-        print("Speaker Calibration — ThinkPad X1 Carbon Gen 13")
-        print("=" * 50)
+        print("Speaker Calibration")
+        print("=" * 40)
         print(f"Will run {iterations} measurement/correction iterations.\n")
 
+    print("Detecting audio devices...")
+    speaker_sink, mic_source = resolve_devices(args.speaker, args.mic)
+    print()
     print("IMPORTANT: Keep the room quiet during measurement!")
     print("The sweep will play through the speakers and record via the mic.\n")
 
@@ -312,7 +415,7 @@ def main():
             rec_file = os.path.join(tmpdir, f"recording_{iteration}.wav")
 
             print("  Playing sweep and recording...")
-            play_and_record(sweep_file, rec_file)
+            play_and_record(sweep_file, rec_file, mic_source)
 
             print("  Analyzing frequency response...")
             freqs, measured_db = analyze_response(sweep_file, rec_file, n_settle, n_sweep)
@@ -336,7 +439,7 @@ def main():
                 for b in bands:
                     print(f"    {b['type']:15s} @ {b['freq']:>5.0f} Hz: {b['gain']:>+5.1f} dB")
 
-                write_pipewire_config(bands)
+                write_pipewire_config(bands, speaker_sink)
 
                 print("  Restarting PipeWire...")
                 restart_pipewire()

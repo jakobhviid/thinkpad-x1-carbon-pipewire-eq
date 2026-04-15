@@ -227,32 +227,30 @@ systemctl --user restart pipewire pipewire-pulse
 
 If you have a different ThinkPad (or any laptop), you can use the calibration tool to understand your speakers and build a custom EQ:
 
-1. **Set up the script for your hardware.** Edit the two device name variables at the top of `speaker-calibrate.py`:
-
-   ```python
-   SPEAKER_SINK = "alsa_output.pci-..."  # your speaker sink
-   MIC_SOURCE = "alsa_input.pci-..."     # your built-in mic
-   ```
-
-   Find your sink name with `pactl list short sinks` and your source name with `pactl list short sources`.
-
-2. **Measure without any EQ installed** to see the raw speaker response:
+1. **Measure without any EQ installed** to see the raw speaker response. The script auto-detects your speaker and microphone, or you can specify them manually:
 
    ```bash
    # Remove any existing EQ first
    rm -f ~/.config/pipewire/pipewire.conf.d/speaker-eq.conf
    systemctl --user restart pipewire pipewire-pulse
 
-   # Run measurement
+   # Run measurement (auto-detects devices)
    python3 speaker-calibrate.py --measure-only --iterations 5
+
+   # Or specify devices manually if auto-detection picks the wrong one
+   python3 speaker-calibrate.py --measure-only --iterations 5 \
+       --speaker "alsa_output.pci-..." \
+       --mic "alsa_input.pci-..."
    ```
 
-3. **Read the chart and identify problems.** Common patterns:
+   Find your device names with `pactl list short sinks` and `pactl list short sources`.
+
+2. **Read the chart and identify problems.** Common patterns:
    - **Deep dip at low frequencies (63-250 Hz)** -- the speakers need bass boost. Add a `bq_lowshelf` with positive gain.
    - **A peak at a specific frequency** -- this is a resonance. Add a `bq_peaking` filter at that frequency with negative gain to cut it. On the X1 Carbon Gen 13, this was at 700 Hz.
    - **Everything is too quiet** -- add preamp stages (see the existing config for the shelf filter trick).
 
-4. **Start with the existing `speaker-eq.conf` and modify it.** Copy the file, adjust the frequency and gain values based on your measurements, install it, and re-measure to see if it improved:
+3. **Start with the existing `speaker-eq.conf` and modify it.** Copy the file, adjust the frequency and gain values based on your measurements, install it, and re-measure to see if it improved:
 
    ```bash
    # Edit the config
@@ -265,7 +263,7 @@ If you have a different ThinkPad (or any laptop), you can use the calibration to
    python3 speaker-calibrate.py --measure-only --iterations 3
    ```
 
-5. **Iterate.** Adjust, reinstall, re-measure. Focus on the frequencies below 1.5 kHz where the DMIC gives reliable readings. For higher frequencies, trust your ears.
+4. **Iterate.** Adjust, reinstall, re-measure. Focus on the frequencies below 1.5 kHz where the DMIC gives reliable readings. For higher frequencies, trust your ears.
 
 ### Limitations
 
