@@ -29,60 +29,65 @@ TARGET_CURVE = {
     1500: 0, 2500: -1, 4000: 0, 8000: 0, 16000: -1
 }
 
-def get_pactl_list(kind):
-    """Get list of sinks or sources from pactl. Returns list of (name, description) tuples."""
-    result = subprocess.run(["pactl", "list", "short", kind], capture_output=True, text=True)
-    items = []
-    for line in result.stdout.strip().splitlines():
-        parts = line.split("\t")
-        if len(parts) >= 2:
-            items.append(parts[1])
-    return items
+def get_pactl_devices(kind):
+    """Get list of sinks or sources from pactl. Returns list of (name, description) dicts."""
+    result = subprocess.run(["pactl", "list", kind], capture_output=True, text=True)
+    devices = []
+    current = {}
+    for line in result.stdout.splitlines():
+        line = line.strip()
+        if line.startswith("Name:"):
+            current["name"] = line.split(":", 1)[1].strip()
+        elif line.startswith("Description:"):
+            current["desc"] = line.split(":", 1)[1].strip()
+            if "name" in current:
+                devices.append(current)
+            current = {}
+    return devices
 
 
-def detect_speaker_sink():
+def detect_speaker_sink(devices):
     """Auto-detect the internal speaker sink."""
-    sinks = get_pactl_list("sinks")
     exclude = re.compile(r'hdmi|usb|bluez|bluetooth|raop|effect_input', re.IGNORECASE)
 
-    # Primary: look for "speaker" in the name
-    for name in sinks:
-        if re.search(r'speaker', name, re.IGNORECASE) and not exclude.search(name):
-            return name
+    # Primary: look for "speaker" in the name or description
+    for d in devices:
+        if re.search(r'speaker', d["name"] + d["desc"], re.IGNORECASE) and not exclude.search(d["name"]):
+            return d
 
     # Fallback: look for SOF/HDA analog output
-    for name in sinks:
-        if re.search(r'sof|hda|analog', name, re.IGNORECASE) and not exclude.search(name):
-            return name
+    for d in devices:
+        if re.search(r'sof|hda|analog', d["name"], re.IGNORECASE) and not exclude.search(d["name"]):
+            return d
 
     return None
 
 
-def detect_mic_source():
+def detect_mic_source(devices):
     """Auto-detect the built-in microphone source."""
-    sources = get_pactl_list("sources")
     exclude = re.compile(r'monitor|usb|bluez|bluetooth|hdmi', re.IGNORECASE)
 
-    # Primary: look for "mic" in the name (but not headset)
-    for name in sources:
-        if re.search(r'mic', name, re.IGNORECASE) \
-           and not re.search(r'headset', name, re.IGNORECASE) \
-           and not exclude.search(name):
-            return name
+    # Primary: look for "mic" or "microphone" in description (but not headset)
+    for d in devices:
+        text = d["name"] + d["desc"]
+        if re.search(r'mic', text, re.IGNORECASE) \
+           and not re.search(r'headset', text, re.IGNORECASE) \
+           and not exclude.search(d["name"]):
+            return d
 
     # Fallback: any non-monitor, non-USB source
-    for name in sources:
-        if not exclude.search(name):
-            return name
+    for d in devices:
+        if not exclude.search(d["name"]):
+            return d
 
     return None
 
 
 def prompt_device_choice(kind, devices):
-    """Let the user pick a device from a numbered list."""
+    """Let the user pick a device from a numbered list with readable names."""
     print(f"\n  Available {kind}:")
-    for i, name in enumerate(devices, 1):
-        print(f"    {i}. {name}")
+    for i, d in enumerate(devices, 1):
+        print(f"    {i}. {d['desc']}  ({d['name']})")
     while True:
         try:
             choice = input(f"\n  Enter number (1-{len(devices)}): ").strip()
@@ -96,39 +101,40 @@ def prompt_device_choice(kind, devices):
 
 def resolve_devices(speaker_arg, mic_arg):
     """Resolve speaker sink and mic source from args or auto-detection."""
+    sinks = get_pactl_devices("sinks")
+    sources = [d for d in get_pactl_devices("sources") if "monitor" not in d["name"].lower()]
+
     # Speaker
     if speaker_arg:
-        speaker = speaker_arg
-        print(f"  Speaker: {speaker} (from --speaker)")
+        speaker = {"name": speaker_arg, "desc": speaker_arg}
+        print(f"  Speaker: {speaker_arg} (from --speaker)")
     else:
-        speaker = detect_speaker_sink()
+        speaker = detect_speaker_sink(sinks)
         if speaker:
-            print(f"  Speaker: {speaker} (auto-detected)")
+            print(f"  Speaker: {speaker['desc']}  ({speaker['name']})")
         else:
             print("  Could not auto-detect speaker sink.")
-            sinks = get_pactl_list("sinks")
             if not sinks:
                 print("  ERROR: No audio sinks found. Is PipeWire running?")
                 sys.exit(1)
-            speaker = prompt_device_choice("sinks", sinks)
+            speaker = prompt_device_choice("speakers", sinks)
 
     # Mic
     if mic_arg:
-        mic = mic_arg
-        print(f"  Mic:     {mic} (from --mic)")
+        mic = {"name": mic_arg, "desc": mic_arg}
+        print(f"  Mic:     {mic_arg} (from --mic)")
     else:
-        mic = detect_mic_source()
+        mic = detect_mic_source(sources)
         if mic:
-            print(f"  Mic:     {mic} (auto-detected)")
+            print(f"  Mic:     {mic['desc']}  ({mic['name']})")
         else:
             print("  Could not auto-detect microphone source.")
-            sources = [s for s in get_pactl_list("sources") if "monitor" not in s.lower()]
             if not sources:
                 print("  ERROR: No audio sources found.")
                 sys.exit(1)
-            mic = prompt_device_choice("sources", sources)
+            mic = prompt_device_choice("microphones", sources)
 
-    return speaker, mic
+    return speaker["name"], mic["name"]
 
 
 def generate_sweep(filename):
