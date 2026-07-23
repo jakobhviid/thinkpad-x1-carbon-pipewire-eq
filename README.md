@@ -1,5 +1,14 @@
 # ThinkPad X1 Carbon PipeWire Speaker EQ
 
+> ### ⚠️ Deprecated — moved and generalized
+> This project has grown into a general tool for measuring and EQ'ing **any**
+> speaker with any microphone:
+> **➡️ [pipewire-speaker-calibration](https://github.com/jakobhviid/pipewire-speaker-calibration)**
+>
+> The X1 Carbon tuning below now ships there as a bundled example profile
+> (`profiles/thinkpad-x1carbon.conf`). This repo stays up for reference but is no
+> longer developed — please use the new one.
+
 **Does your ThinkPad X1 Carbon sound thin, tinny, or hollow on Linux?** This is a known issue. On Windows, Lenovo includes Dolby Audio software that tunes the speakers to sound good. On Linux, that software doesn't exist, so the speakers run with flat/generic settings that sound significantly worse.
 
 This project provides a simple config file that fixes this. No extra software to install -- it uses PipeWire's built-in audio processing, which is already running on your system.
